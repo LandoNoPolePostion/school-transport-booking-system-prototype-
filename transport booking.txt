@@ -1,0 +1,155 @@
+<!--
+Single-file web app: index.html
+Uses CDN sql.js (SQLite compiled to wasm) with Cloudflare — no ini or wasm downloads needed.
+-->
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width,initial-scale=1" />
+  <title>School Transport Booking — 7-day Schedule</title>
+  <style>
+    :root{--bg:#0f1724;--card:#0b1220;--muted:#94a3b8;--accent:#06b6d4;--glass:rgba(255,255,255,0.03)}
+    html,body{height:100%;margin:0;font-family:Inter,Segoe UI,Roboto,Arial,sans-serif;background:linear-gradient(180deg,#071224 0%, #071a2b 100%);color:#e6eef6}
+    .app{max-width:1100px;margin:28px auto;padding:22px;}
+    header{display:flex;align-items:center;justify-content:space-between;gap:12px}
+    h1{margin:0;font-size:20px}
+    .meta{color:var(--muted);font-size:13px}
+
+    .card{background:var(--card);border-radius:12px;padding:16px;box-shadow:0 6px 18px rgba(2,6,23,0.6);}
+    .grid{display:grid;grid-template-columns:1fr 1fr;gap:16px;margin-top:16px}
+    form label{display:block;font-size:13px;color:var(--muted);margin-bottom:8px}
+    .form-row{display:flex;gap:8px;align-items:center}
+    input,select,button{padding:8px 10px;border-radius:8px;border:1px solid rgba(255,255,255,0.05);background:var(--glass);color:inherit}
+    input[type="datetime-local"]{min-width:220px}
+    button{cursor:pointer;border:none}
+    .controls{display:flex;gap:8px;align-items:center}
+
+    .schedule{margin-top:18px;display:grid;grid-template-columns:repeat(7,1fr);gap:8px}
+    .day{min-height:120px;padding:8px;border-radius:8px;background:linear-gradient(180deg,rgba(255,255,255,0.02),transparent);border:1px solid rgba(255,255,255,0.03)}
+    .day h3{margin:0;font-size:13px}
+    .date-muted{font-size:12px;color:var(--muted);margin-bottom:8px}
+    .booking{margin-top:6px;padding:6px;border-radius:6px;background:rgba(255,255,255,0.02);display:flex;justify-content:space-between;gap:6px;align-items:center}
+    .booking .info{font-size:13px}
+    .booking small{display:block;color:var(--muted);font-size:11px}
+    .booking button{background:transparent;color:#ff7b7b;padding:6px;border-radius:6px}
+
+    .tiny{font-size:12px;color:var(--muted)}
+    .top-actions{display:flex;gap:8px}
+
+    footer{margin-top:18px;color:var(--muted);font-size:13px}
+
+    @media (max-width:900px){.grid{grid-template-columns:1fr;}.schedule{grid-template-columns:repeat(2,1fr);} }
+    @media (max-width:520px){.schedule{grid-template-columns:1fr}.form-row{flex-direction:column;align-items:stretch}}
+  </style>
+</head>
+<body>
+  <div class="app">
+    <header>
+      <div>
+        <h1>School Transport Booking</h1>
+        <div class="meta">Book a vehicle slot and view a rolling 7-day schedule (today + 6 days)</div>
+      </div>
+      <div class="top-actions">
+        <div class="tiny" id="serverClock">Loading time…</div>
+      </div>
+    </header>
+
+    <div class="grid">
+      <div class="card">
+        <h2 style="margin-top:0">New Booking</h2>
+        <form id="bookingForm">
+          <label>Passenger / Group name
+            <input id="name" type="text" required placeholder="e.g. Juan Dela Cruz" />
+          </label>
+
+          <label>Vehicle
+            <select id="vehicle">
+              <option>Mini Bus 1</option>
+              <option>Mini Bus 2</option>
+              <option>Shuttle A</option>
+              <option>Shuttle B</option>
+            </select>
+          </label>
+
+          <label>Pick date & time (within next 7 days)
+            <div class="form-row">
+              <input id="date" type="date" required />
+              <input id="time" type="time" required />
+            </div>
+          </label>
+
+          <div style="display:flex;gap:8px;margin-top:10px;align-items:center">
+            <button type="submit">Add booking</button>
+            <button type="button" id="clearOld">Cleanup older bookings</button>
+            <button type="button" id="exportDb">Export DB</button>
+            <button type="button" id="importDb">Import DB</button>
+            <input id="importFile" type="file" accept="application/octet-stream" style="display:none" />
+          </div>
+
+          <div class="tiny" style="margin-top:8px">Dates restricted to today and next 6 days. The schedule always shows the rolling 7-day window; old entries are removed on load to keep things tidy.</div>
+        </form>
+      </div>
+
+      <div class="card">
+        <h2 style="margin-top:0">7-day Schedule</h2>
+        <div id="schedule" class="schedule"></div>
+      </div>
+    </div>
+
+    <footer class="card">
+      <div>Open <strong>index.html</strong> in VS Code and run with Live Server (or any static HTTP server). The app uses an in-browser SQLite DB (sql.js) persisted to localStorage.</div>
+    </footer>
+  </div>
+
+  <script src="https://cdnjs.cloudflare.com/ajax/libs/sql.js/1.8.0/sql-wasm.js"></script>
+  <script>
+    // Utility helpers
+    function fmtDate(d){ return d.toLocaleDateString(undefined,{weekday:'short',month:'short',day:'numeric'}) }
+    function toISODate(d){ return d.toISOString().slice(0,10) }
+
+    function getWindowDates(){ const arr=[];const now=new Date();now.setHours(0,0,0,0);for(let i=0;i<7;i++){const dd=new Date(now);dd.setDate(now.getDate()+i);arr.push(dd)}return arr; }
+
+    let SQL; let db;
+    const LS_KEY = 'school_transport_db_v1';
+
+    async function initSql(){
+      SQL = await initSqlJs({ locateFile: file => 'https://cdnjs.cloudflare.com/ajax/libs/sql.js/1.8.0/' + file });
+      const saved = localStorage.getItem(LS_KEY);
+      if (saved){
+        try{
+          const u8 = Uint8Array.from(atob(saved), c=>c.charCodeAt(0));
+          db = new SQL.Database(u8);
+        }catch(e){ console.error('Failed to load DB, creating new one', e); db = new SQL.Database(); }
+      } else { db = new SQL.Database(); }
+
+      db.run(`CREATE TABLE IF NOT EXISTS bookings (id INTEGER PRIMARY KEY AUTOINCREMENT,name TEXT NOT NULL,vehicle TEXT NOT NULL,dt TEXT NOT NULL,created_at TEXT NOT NULL);`);
+      cleanupOldBookings(); render(); tickClock();
+    }
+
+    function persistDb(){ try{ const data=db.export(); const b64=btoa(String.fromCharCode.apply(null,data)); localStorage.setItem(LS_KEY,b64);}catch(e){console.error(e)} }
+    function addBooking(name,vehicle,iso){ const created=new Date().toISOString(); const s=db.prepare('INSERT INTO bookings (name,vehicle,dt,created_at) VALUES (?,?,?,?)'); s.run([name,vehicle,iso,created]); s.free(); persistDb(); render(); }
+    function deleteBooking(id){ const s=db.prepare('DELETE FROM bookings WHERE id=?'); s.run([id]); s.free(); persistDb(); render(); }
+    function fetchBookingsBetween(start,end){ const s=db.prepare('SELECT id,name,vehicle,dt FROM bookings WHERE dt>=? AND dt<? ORDER BY dt'); s.bind([start,end]); const rows=[]; while(s.step()) rows.push(s.getAsObject()); s.free(); return rows; }
+    function cleanupOldBookings(){ const today=new Date(); today.setHours(0,0,0,0); const iso=today.toISOString(); const s=db.prepare('DELETE FROM bookings WHERE dt<?'); s.run([iso]); s.free(); persistDb(); }
+
+    function render(){ const c=document.getElementById('schedule'); c.innerHTML=''; const days=getWindowDates(); const startISO=new Date(days[0]).toISOString(); const endDate=new Date(days[6]); endDate.setDate(endDate.getDate()+1); const endISO=endDate.toISOString(); const bookings=fetchBookingsBetween(startISO,endISO); const map={}; for(const d of days){ map[toISODate(d)]=[] } for(const b of bookings){ const key=b.dt.slice(0,10); if(map[key]) map[key].push(b) } for(const d of days){ const box=document.createElement('div'); box.className='day'; const h3=document.createElement('h3'); h3.textContent=fmtDate(d); const dm=document.createElement('div'); dm.className='date-muted'; dm.textContent=toISODate(d); box.appendChild(h3); box.appendChild(dm); const list=map[toISODate(d)]||[]; if(list.length===0){ const e=document.createElement('div'); e.className='tiny'; e.textContent='No bookings'; box.appendChild(e);} else { for(const b of list){ const el=document.createElement('div'); el.className='booking'; const info=document.createElement('div'); info.className='info'; const t=new Date(b.dt); info.innerHTML=`<strong>${escapeHtml(b.name)}</strong> <small>${b.vehicle} • ${t.toLocaleTimeString([], {hour:'2-digit',minute:'2-digit'})}</small>`; const btn=document.createElement('button'); btn.textContent='✖'; btn.onclick=()=>{ if(confirm('Cancel this booking?')) deleteBooking(b.id); }; el.appendChild(info); el.appendChild(btn); box.appendChild(el);} } c.appendChild(box);} }
+
+    function escapeHtml(s){ return s.replace(/[&<>\"]/g,c=>({"&":"&amp;","<":"&lt;",">":"&gt;","\"":"&quot;"})[c]); }
+    function setupDateLimits(){ const el=document.getElementById('date'); const now=new Date(); now.setHours(0,0,0,0); const min=toISODate(now); const maxDate=new Date(now); maxDate.setDate(maxDate.getDate()+6); const max=toISODate(maxDate); el.min=min; el.max=max; el.value=min; }
+
+    function exportDbFile(){ const data=db.export(); const blob=new Blob([data],{type:'application/octet-stream'}); const url=URL.createObjectURL(blob); const a=document.createElement('a'); a.href=url; a.download='school_transport.sqlite'; a.click(); URL.revokeObjectURL(url); }
+    function importDbFile(file){ const reader=new FileReader(); reader.onload=e=>{ const ab=e.target.result; const u8=new Uint8Array(ab); try{ db=new SQL.Database(u8); db.run('CREATE TABLE IF NOT EXISTS bookings (id INTEGER PRIMARY KEY AUTOINCREMENT,name TEXT NOT NULL,vehicle TEXT NOT NULL,dt TEXT NOT NULL,created_at TEXT NOT NULL)'); persistDb(); render(); alert('Imported DB'); }catch(err){ alert('Import failed:'+err.message) } }; reader.readAsArrayBuffer(file); }
+    function tickClock(){ const el=document.getElementById('serverClock'); setInterval(()=>{ el.textContent=new Date().toLocaleString(); },1000); }
+
+    document.getElementById('bookingForm').addEventListener('submit',e=>{ e.preventDefault(); const name=document.getElementById('name').value.trim(); const vehicle=document.getElementById('vehicle').value; const date=document.getElementById('date').value; const time=document.getElementById('time').value; if(!name||!date||!time){alert('Please fill all fields');return;} const dt=new Date(date+'T'+time); const win=getWindowDates(); const min=new Date(win[0]); min.setHours(0,0,0,0); const max=new Date(win[6]); max.setHours(23,59,59,999); if(dt<min||dt>max){alert('Date/time must be within 7-day window');return;} addBooking(name,vehicle,dt.toISOString()); e.target.reset(); setupDateLimits(); });
+
+    document.getElementById('clearOld').addEventListener('click',()=>{ if(confirm('Remove old bookings?')){ cleanupOldBookings(); render(); } });
+    document.getElementById('exportDb').addEventListener('click',exportDbFile);
+    document.getElementById('importDb').addEventListener('click',()=>document.getElementById('importFile').click());
+    document.getElementById('importFile').addEventListener('change',e=>{ const f=e.target.files[0]; if(f) importDbFile(f); e.target.value=''; });
+
+    setupDateLimits(); initSql();
+  </script>
+</body>
+</html>

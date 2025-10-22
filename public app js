@@ -1,0 +1,107 @@
+// public/app.js
+const form = document.getElementById('booking-form');
+const scheduleEl = document.getElementById('schedule');
+const dateInput = document.getElementById('date');
+
+(function setDateDefault() {
+  const today = new Date();
+  const yyyy = today.getFullYear();
+  const mm = String(today.getMonth() + 1).padStart(2, '0');
+  const dd = String(today.getDate()).padStart(2, '0');
+  const s = `${yyyy}-${mm}-${dd}`;
+  dateInput.min = s;
+  dateInput.value = s;
+})();
+
+async function fetchSchedule() {
+  const res = await fetch('/api/bookings');
+  const data = await res.json();
+  renderSchedule(data.days, data.bookings);
+}
+
+function renderSchedule(days, bookings) {
+  scheduleEl.innerHTML = '';
+  days.forEach(day => {
+    const dayBookings = bookings.filter(b => b.date === day);
+    const d = new Date(day + 'T00:00:00');
+    const label = d.toLocaleDateString(undefined, { weekday: 'short', month: 'short', day: 'numeric' });
+
+    const card = document.createElement('div');
+    card.className = 'day-card';
+    const h = document.createElement('h3');
+    h.textContent = label;
+    card.appendChild(h);
+
+    if (dayBookings.length === 0) {
+      const p = document.createElement('div');
+      p.textContent = 'No bookings';
+      p.style.color = '#666';
+      card.appendChild(p);
+    } else {
+      dayBookings.forEach(b => {
+        const box = document.createElement('div');
+        box.className = 'booking';
+        // Use escaped name to prevent HTML injection
+        box.innerHTML = `<strong>${escapeHtml(b.vehicle)}</strong> — ${escapeHtml(b.time)}<div class="meta">${escapeHtml(b.name)}</div>`;
+
+        const del = document.createElement('button');
+        del.textContent = 'Cancel';
+        del.onclick = async () => {
+          if (!confirm('Cancel booking?')) return;
+          await fetch('/api/bookings/' + b.id, { method: 'DELETE' });
+          await fetchSchedule();
+        };
+
+        box.appendChild(del);
+        card.appendChild(box);
+      });
+    }
+
+    scheduleEl.appendChild(card);
+  });
+}
+
+function escapeHtml(str) {
+  // Clean, safe mapping for escaping special HTML chars
+  const map = {
+    '&': '&amp;',
+    '<': '&lt;',
+    '>': '&gt;',
+    '"': '&quot;',
+    "'": '&#39;'
+  };
+  return String(str).replace(/[&<>"']/g, m => map[m]);
+}
+
+form.addEventListener('submit', async e => {
+  e.preventDefault();
+  const name = document.getElementById('name').value.trim();
+  const vehicle = document.getElementById('vehicle').value;
+  const date = document.getElementById('date').value;
+  const time = document.getElementById('time').value;
+  if (!name || !date || !time) return alert('Please fill fields');
+
+  const res = await fetch('/api/bookings', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ name, vehicle, date, time })
+  });
+
+  const j = await res.json();
+  if (res.ok) {
+    form.reset();
+    (function resetDate() {
+      const today = new Date();
+      const yyyy = today.getFullYear();
+      const mm = String(today.getMonth() + 1).padStart(2, '0');
+      const dd = String(today.getDate()).padStart(2, '0');
+      document.getElementById('date').value = `${yyyy}-${mm}-${dd}`;
+    })();
+    fetchSchedule();
+  } else {
+    alert(j.error || 'Failed');
+  }
+});
+
+// initial load
+fetchSchedule();

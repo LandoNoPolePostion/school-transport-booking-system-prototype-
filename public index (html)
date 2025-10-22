@@ -1,0 +1,51 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width,initial-scale=1" />
+  <title>School Transport Booking</title>
+  <link rel="stylesheet" href="styles.css">
+</head>
+<body>
+  <div class="container">
+    <h1>School Transport Booking</h1>
+
+    <section class="form-card">
+      <h2>Book a vehicle</h2>
+      <form id="booking-form">
+        <label>
+          Name
+          <input type="text" id="name" required>
+        </label>
+        <label>
+          Vehicle
+          <select id="vehicle">
+            <option>Van A</option>
+            <option>Van B</option>
+            <option>Bus 1</option>
+            <option>Bus 2</option>
+          </select>
+        </label>
+        <label>
+          Date
+          <input type="date" id="date" required>
+        </label>
+        <label>
+          Time
+          <input type="time" id="time" required>
+        </label>
+        <div class="actions">
+          <button type="submit">Book</button>
+        </div>
+      </form>
+    </section>
+
+    <section>
+      <h2>7-day Schedule</h2>
+      <div id="schedule" class="schedule-grid"></div>
+    </section>
+  </div>
+
+  <script src="app.js"></script>
+</body>
+</html>

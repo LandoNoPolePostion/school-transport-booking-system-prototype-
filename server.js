@@ -1,42 +1,46 @@
 const express = require('express');
 const cors = require('cors');
 const path = require('path');
+const sqlite3 = require('sqlite3').verbose();
 
 const app = express();
 const PORT = 3000;
 
 app.use(cors());
 app.use(express.json());
-
-// Serve everything in your main folder
 app.use(express.static(__dirname));
 
-// In-memory booking data (temporary)
-let bookings = [];
+// Database setup
+const db = new sqlite3.Database('./transport.db');
+db.run(`CREATE TABLE IF NOT EXISTS bookings (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  name TEXT,
+  vehicle TEXT,
+  date TEXT,
+  start TEXT,
+  end TEXT
+)`);
 
-// API to add a booking
-app.post('/book', (req, res) => {
-  bookings.push(req.body);
-  res.json({ success: true });
-});
-
-// API to get all bookings for 7 days
-app.get('/bookings', (req, res) => {
-  const now = new Date();
-  const sevenDays = new Date();
-  sevenDays.setDate(now.getDate() + 7);
-  const filtered = bookings.filter(b => {
-    const d = new Date(b.date);
-    return d >= now && d <= sevenDays;
+// Routes
+app.get('/api/bookings', (req, res) => {
+  db.all("SELECT * FROM bookings", [], (err, rows) => {
+    if (err) return res.status(500).json({ error: err.message });
+    res.json(rows);
   });
-  res.json(filtered);
 });
 
-// Serve your main HTML
+app.post('/api/bookings', (req, res) => {
+  const { name, vehicle, date, start, end } = req.body;
+  db.run("INSERT INTO bookings (name, vehicle, date, start, end) VALUES (?, ?, ?, ?, ?)",
+    [name, vehicle, date, start, end],
+    function (err) {
+      if (err) return res.status(500).json({ error: err.message });
+      res.json({ id: this.lastID });
+    });
+});
+
 app.get('/', (req, res) => {
   res.sendFile(path.join(__dirname, 'index.html'));
 });
 
-app.listen(PORT, () => {
-  console.log(`✅ Server running at http://localhost:${PORT}`);
-});
+app.listen(PORT, () => console.log(`✅ Server running at http://localhost:${PORT}`));
